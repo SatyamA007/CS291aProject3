@@ -19,7 +19,7 @@ class App extends Component {
   streamToken=null;
   stream = null;
   chats = [];
-  users=[];
+  users={};
 
     update_users() {
     this.setState(({updatedData})=>({['updatedData']:!updatedData}));
@@ -32,8 +32,8 @@ class App extends Component {
     
     output(chatText) {
         instance.chats.push(chatText);
-        this.chat.scrollTop = this.chat.scrollHeight - this.chat.clientHeight;
         this.setState(({updatedData})=>({['updatedData']:!updatedData}));
+        this.chat.scrollTop = this.chat.scrollHeight - this.chat.clientHeight;
     }
 
     chatMessages(){
@@ -53,7 +53,7 @@ class App extends Component {
     this.message.value = "Please connect to send messages.";
     this.title.classList.add("disconnected");
     if (clear_users) {
-        this.users = [];
+        this.users = new Set();
         this.update_users();
         }
     }
@@ -99,7 +99,7 @@ class App extends Component {
         "Join",
         (event)=> {
             var data = JSON.parse(event.data);
-            instance2.users.push(data.user);
+            instance2.users.add(data.user);
             instance2.update_users();
             instance2.output(instance2.date_format(data["created"]) + " JOIN: " + data.user);
         },
@@ -117,7 +117,7 @@ class App extends Component {
         "Part",
         (event)=> {
             var data = JSON.parse(event.data);
-            instance2.users = instance2.users.filter(item => item !== data.user)
+            instance2.users.delete(data.user);
             instance2.update_users();
             instance2.output(instance2.date_format(data["created"]) + " PART: " + data.user);
         },
@@ -135,7 +135,7 @@ class App extends Component {
         "Users",
         (event) =>{            
             const newArr = JSON.parse(event.data).users;
-            instance2.users.splice(0, instance2.users.length, ...newArr);
+            instance2.users = new Set(newArr);
             instance2.update_users();
         },
         false
@@ -150,7 +150,7 @@ class App extends Component {
                 instance2.show_login();
             } else {
                 instance2.handle_disconnect(false);
-                console.log("Disconnected, retrying");
+                alert("Disconnected, retrying");
             }
         },
         false
@@ -176,12 +176,12 @@ login() {
             instance.streamToken = data.stream_token;
             instance.start_stream();
         } else if (this.status === 403) {
-            console.log("Invalid username or password");
+            alert("Invalid username or password");
         } else if (this.status === 409) {
-            console.log(instance.username.value + " is already logged in");
+            alert(instance.username.value + " is already logged in");
 
         } else {
-            console.log(this.status + " failure to /login");
+            alert(this.status + " failure to /login");
         }
     };
     request.send(form);
@@ -208,7 +208,7 @@ login() {
         "Bearer " + this.messageToken
     );
     request.onreadystatechange = (event)=> {
-        if (event.target.readyState == 4 && event.target.status != 403 && this.messageToken != null) {
+        if (event.target.readyState === 4 && event.target.status !== 403 && this.messageToken != null) {
             this.messageToken = event.target.getResponseHeader("token");
         }
     }
@@ -222,10 +222,10 @@ login() {
   render() {
     return (
       <div>
-        <title>CS291A Chat</title>
+        <title>Budget-Cut Whatsapp</title>
 
         <section id="container">
-            <h1 id="title" ref={elem => this.title = elem} class="disconnected">CS291 Chat</h1>
+            <h1 id="title" ref={elem => this.title = elem} class="disconnected">Budget-Cut Whatsapp</h1>
             <div id="window">
                 <div id="chat" ref={elem => this.chat = elem}>
                     <ul>{(this.chats).map(item => (
@@ -237,7 +237,7 @@ login() {
                 <div id="user_window">
                     <h2>Online</h2>
                     <ul id="users" ref={elem => this.user_list = elem} >
-                        {(this.users).map(item => (
+                        {Array.from(this.users).sort().map(item => (
                         <li>
                             {item} 
                         </li> 
