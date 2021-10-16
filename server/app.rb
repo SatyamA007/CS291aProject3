@@ -73,19 +73,24 @@ get '/stream/:token', provides: 'text/event-stream' do
     return [409, 'Connection already exists!']
   end
 
-  
+
   stream(:keep_open) do |connection|
-    connections<<connection
+
+    connections << connection
+
     if(request.env["HTTP_LAST_EVENT_ID"] == nil)
       $streams[token] = connection
       sse_event(connection, "Users", token)  # Users sse event
-      connections.each do |connection|
+    end
+
+    connections.each do |connection|
       sse_event(connection, "Join", username)  #Join sse event
     end
 
     connection.callback do
-      sse_event(connection, "Disconnect")    #Disconnect sse e.delete(connecti.each do |conn|
-      sse_event(connection, "Part", username)  #Part sse event
+      sse_event(connection, "Disconnect")    #Disconnect sse event
+      connection.each do |conn|
+        sse_event(connection, "Part", username)  #Part sse event
       end
     end
   end
