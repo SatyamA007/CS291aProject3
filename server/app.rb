@@ -8,11 +8,12 @@ require 'securerandom'
 
 
 SCHEDULE_TIME = 32
-connections = []
 $users = Hash.new() # username vs password
 $streams = Hash.new() # stream token vs stream object
 $stokens = Hash.new() # username vs stream tokens
 $mtokens = Hash.new() # msg token vs stream tokens
+$startTime = Time.now
+connections = []
 
 before do
   headers 'Access-Control-Allow-Origin' => '*'
@@ -20,8 +21,9 @@ end
 
 EventMachine.schedule do
   EventMachine.add_periodic_timer(SCHEDULE_TIME) do
-    # Change this for any timed events you need to schedule.
-    #puts "This message will be output to the server console every #{SCHEDULE_TIME} seconds"
+    connections.each do |connection|
+      sse_event(connection,'ServerStatus')
+    end
   end
 end
 
@@ -44,7 +46,7 @@ def sse_event(stream, event, username="", message="")
     data = {user: username, created: timestamp()}
     stream << "event: Part\n" << "data: "<< data.to_json << "\n" << "id: " << SecureRandom.uuid << "\n\n"
   when 'ServerStatus'
-    data = {status: username, created: timestamp()}
+    data = {status: "Server uptime: "+(Time.now - $startTime).round().to_s+" seconds", created: timestamp()}
     stream << "event: ServerStatus\n" << "data: "<< data.to_json << "\n" << "id: " << SecureRandom.uuid << "\n\n"
   when 'Users'
     data = {users: $stokens.keys(), created: timestamp()}
@@ -66,20 +68,25 @@ get '/stream/:token', provides: 'text/event-stream' do
   end
 
   username = $stokens.key(token)
-  strm = $streams[token]
 
-  if(strm != nil)
+  if($streams[token] != nil&&!$streams[token].closed?())
     return [409, 'Connection already exists!']
   end
+
   
   stream(:keep_open) do |connection|
-    connections << connection
     #$streams[token] = connection
-    sse_event(connection, "Join", username)  #Join sse event
+    if(request.env["HTTP_LAST_EVENT_ID"] == nil)
+      $streams[token] = connection
+      sse_event(connection, "Users", token)  # Users sse event
+      connections.each do |connection|
+      sse_event(connection, "Join", username)  #Join sse event
+    end
 
     connection.callback do
-      sse_event(connection, "Disconnect")    #Disconnect sse event
-      connections.delete(connection)
+      sse_event(connection, "Disconnect")    #Disconnect sse e.delete(connecti.each do |conn|
+        sse_event(conn, "Part", username)  #Part sse event
+      end
     end
   end
 end
@@ -115,8 +122,8 @@ post '/login' do
     body = {message_token: "#{msgtoken}", stream_token: "#{strtoken}"}
     headers 'Content-Type' => 'application/json'
     return [201, body.to_json]
-  rescue
-    return [422, 'Exception']
+  rescue =>e
+    return [422, 'Exception '+e.to_s]
   end
 
 end
