@@ -89,8 +89,10 @@ get '/stream/:token', provides: 'text/event-stream' do
 
     connection.callback do
       sse_event(connection, "Disconnect")    #Disconnect sse event
-      connection.each do |conn|
-        sse_event(connection, "Part", username)  #Part sse event
+      connections.delete(connection)
+
+      connections.each do |conn|
+        sse_event(conn, "Part", username)  #Part sse event
       end
     end
   end
