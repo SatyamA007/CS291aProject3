@@ -28,6 +28,7 @@ $userStreamToken = Hash.new() # username vs stream tokens
 $msgTknUser  = Hash.new() # msg tokens vs userName
 $startTime = Time.now
 $connections = [] # Stream object array
+$messageQ = []
 
 EventMachine.schedule do
   EventMachine.add_periodic_timer(SCHEDULE_TIME) do
@@ -41,33 +42,61 @@ def timestamp
   Time.now.to_i
 end
 
+def date_format(timestamp) 
+  time = Time.at(timestamp)
+  return time.strftime("%m/%d/%Y") + " " + time.strftime("%I:%M %p");
+end
+
+def messageQput(newMessage)
+  if $messageQ.size()<100
+    $messageQ.push(newMessage)
+  else 
+    $messageQ.push(newMessage)
+    $messageQ.shift()
+  end
+end
+
+def messageQget(stream)
+  for message in $messageQ
+    stream << message
+  end    
+end
+
 def sse_event(stream, event, username="", message="")
+  streamMessage = ""
+
   case event
   when 'Join'
     data = {user: username, created: timestamp()}
-    stream << "event: Join\n" << "data: "<< data.to_json << "\n" << "id: " << SecureRandom.uuid << "\n\n"
+    streamMessage = "event: Join\n" + "data: "+ data.to_json + "\n" + "id: " + SecureRandom.uuid + "\n\n"    
   when 'Disconnect'
     data = {created: timestamp()}
     stream << "event: Disconnect\n" << "data: "<< data.to_json << "\n" << "id: " << SecureRandom.uuid << "\n\n"
   when 'Message'
     data = {message: message,user: username, created: timestamp()}
-    stream << "event: Message\n" << "data: "<< data.to_json << "\n" << "id: " << SecureRandom.uuid << "\n\n"
+    streamMessage = "event: Message\n" + "data: "+ data.to_json + "\n" + "id: " + SecureRandom.uuid + "\n\n"
   when 'Part'
     data = {user: username, created: timestamp()}
-    stream << "event: Part\n" << "data: "<< data.to_json << "\n" << "id: " << SecureRandom.uuid << "\n\n"
+    streamMessage = "event: Part\n" + "data: "+ data.to_json + "\n" + "id: " + SecureRandom.uuid + "\n\n"
   when 'ServerStatus'
-    data = {status: "Server uptime: "+(Time.now - $startTime).round().to_s+" seconds", created: timestamp()}
-    stream << "event: ServerStatus\n" << "data: "<< data.to_json << "\n" << "id: " << SecureRandom.uuid << "\n\n"
+    statusText =  "Server uptime: "+(Time.now - $startTime).round().to_s+" seconds"
+    data = {status: statusText, created: timestamp()}
+    streamMessage = "event: ServerStatus\n" + "data: "+ data.to_json + "\n" + "id: " + SecureRandom.uuid + "\n\n"
   when 'Users'
     data = {users: $userStreamToken.keys(), created: timestamp()}
     stream << "event: Users\n" << "data: "<< data.to_json << "\n" << "id: " << SecureRandom.uuid << "\n\n"
   else
     stream << "event: error\n"<< SecureRandom.uuid << "\n\n"
   end 
+  
+  if streamMessage!=""
+    stream << streamMessage
+    messageQput(streamMessage) unless !$messageQ.empty?()&&$messageQ.last.split("\n")[1]==streamMessage.split("\n")[1];    
+  end
 end
 
 def disconnect(connection, token, username)
-  sse_event(connection, "Disconnect")    #Disconnect sse event
+  sse_event(connection, "Disconnect")  #Disconnect sse event
   $connections.delete(connection)
   connection.close()
   $streams.delete(token)
@@ -78,7 +107,6 @@ end
 #----- /stream Endpoint -------
 
 get '/stream/:token', provides: 'text/event-stream' do
-  headers 'Access-Control-Allow-Origin' => '*'
 
   token = params['token']
   if($userStreamToken.key(token) == nil)
@@ -88,7 +116,7 @@ get '/stream/:token', provides: 'text/event-stream' do
   username = $userStreamToken.key(token)
 
   if($streams[token] != nil&&!$streams[token].closed?())
-    return [409, 'Connection already exists!']
+    #return [409, 'Connection already exists!']
   end
 
 
@@ -97,8 +125,11 @@ get '/stream/:token', provides: 'text/event-stream' do
     $connections << connection
 
     if(request.env["HTTP_LAST_EVENT_ID"] == nil)
+      if $streams[token] == nil
+        messageQget(connection)
+      end
       $streams[token] = connection
-      sse_event(connection, "Users", token)  # Users sse event
+      sse_event(connection, "Users", token)  # Users sse event     
     end
 
     $connections.each do |connection|

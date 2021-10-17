@@ -1,3 +1,5 @@
+//CSS by Prof. Bryce Boe (CS291A UCSB) via https://chat.cs291.com/
+
 import { Component } from "react";
 import "./App.css";
 
