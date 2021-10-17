@@ -83,7 +83,7 @@ def sse_event(stream, event, username="", message="")
     data = {status: statusText, created: timestamp()}
     streamMessage = "event: ServerStatus\n" + "data: "+ data.to_json + "\n" + "id: " + SecureRandom.uuid + "\n\n"
   when 'Users'
-    data = {users: $userStreamToken.keys(), created: timestamp()}
+    data = {users: $userStreamToken.keys().select { |uname| !$streams[$userStreamToken[uname]].nil? }, created: timestamp()}
     stream << "event: Users\n" << "data: "<< data.to_json << "\n" << "id: " << SecureRandom.uuid << "\n\n"
   else
     stream << "event: error\n"<< SecureRandom.uuid << "\n\n"
@@ -95,8 +95,8 @@ def sse_event(stream, event, username="", message="")
   end
 end
 
-def disconnect(connection, token, username)
-  sse_event(connection, "Disconnect")  #Disconnect sse event
+def disconnectAndPart(connection, token, username, allowRetry = true)
+  sse_event(connection, "Disconnect", username)  unless allowRetry #Disconnect sse event
   $connections.delete(connection)
   connection.close()
   $streams.delete(token)
@@ -116,9 +116,8 @@ get '/stream/:token', provides: 'text/event-stream' do
   username = $userStreamToken.key(token)
 
   if($streams[token] != nil&&!$streams[token].closed?())
-    #return [409, 'Connection already exists!']
+    return [409, 'Connection already exists!']
   end
-
 
   stream(:keep_open) do |connection|
 
@@ -137,7 +136,7 @@ get '/stream/:token', provides: 'text/event-stream' do
     end
 
     connection.callback do
-      disconnect(connection, token, username)
+      disconnectAndPart(connection, token, username)
     end
   end
 end
@@ -153,8 +152,8 @@ post '/login' do
       return [422, 'Empty username/password']
     end
 
-    if($userStreamToken[uname] != nil)
-      return [409, 'Multiple login tabs']
+    if $userStreamToken[uname] != nil && $streams[$userStreamToken[uname]]!=nil&&!$streams[$userStreamToken[uname]].closed?()
+      return [409, 'User already logged in']
     end
 
     if($user_list.has_key?(uname))
@@ -191,33 +190,35 @@ post '/message' do
   end
 
   msgToken = authorization[1]
+  if !$msgTknUser.has_key?(msgToken)
+    return [403,"Invalid message token"]
+  end
+
   user = $msgTknUser[msgToken]
   strToken = $userStreamToken[user]
   streamObj = $streams[strToken]
-
-  if(streamObj.nil?())
-    return [409,"No open stream for the user" + user]
-  end
-
-  if(strToken.match /^\h{64}$/).nil?
-    return [403,"Invalid signed token"]
-  end
+  cond409 = streamObj.nil?()||streamObj.closed?()
 
   message = request.params['message']
   if(message.eql?("/quit"))
-    disconnect(streamObj, strToken, user)
+    disconnectAndPart(streamObj, strToken, user, false)
   end
 
   newMsgToken = SecureRandom.hex
   $msgTknUser.delete(msgToken)
   $msgTknUser[newMsgToken] = user
 
+  
   #Send msg to all user streams
-  $connections.each do |connection|
-    sse_event(connection, "Message",user, message)  #Message sse event
+  unless (message.eql?("/quit")||cond409)
+    $connections.each do |connection| 
+      sse_event(connection, "Message",user, message)  #Message sse event
+    end
   end
 
   headers 'Content-Type' => 'text/html; charset=utf-8'
   headers 'Token' => newMsgToken
+  
+  return [409,"No open stream for the user " + user] if cond409
   return [201, "CREATED"]
 end
