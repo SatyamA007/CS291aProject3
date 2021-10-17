@@ -150,7 +150,7 @@ class App extends Component {
                 instance2.show_login();
             } else {
                 instance2.handle_disconnect(false);
-                alert("Disconnected, retrying");
+                console.log("Disconnected, retrying");
             }
         },
         false
