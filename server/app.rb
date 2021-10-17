@@ -6,18 +6,28 @@ require 'json'
 require 'pp'
 require 'securerandom'
 
+configure do
+  enable :cross_origin
+end
+before do
+  response.headers['Access-Control-Allow-Origin'] = '*'
+end
+
+# routes...
+options "*" do
+  response.headers["Allow"] = "GET, PUT, POST, DELETE, OPTIONS"
+  response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, Accept, X-User-Email, X-Auth-Token"
+  response.headers["Access-Control-Allow-Origin"] = "*"
+  200
+end
 
 SCHEDULE_TIME = 32
 $users = Hash.new() # username vs password
 $streams = Hash.new() # stream token vs stream object
 $stokens = Hash.new() # username vs stream tokens
-$mtokens = Hash.new() # msg token vs stream tokens
+$msgTknUser  = Hash.new() # msg tokens vs userName
 $startTime = Time.now
 connections = []
-
-before do
-  headers 'Access-Control-Allow-Origin' => '*'
-end
 
 EventMachine.schedule do
   EventMachine.add_periodic_timer(SCHEDULE_TIME) do
@@ -90,7 +100,7 @@ get '/stream/:token', provides: 'text/event-stream' do
     connection.callback do
       sse_event(connection, "Disconnect")    #Disconnect sse event
       connections.delete(connection)
-
+      $streams.delete(token)
       connections.each do |conn|
         sse_event(conn, "Part", username)  #Part sse event
       end
@@ -125,8 +135,9 @@ post '/login' do
     strtoken = SecureRandom.hex(32)
     msgtoken = SecureRandom.hex
     $stokens[uname] = strtoken
+    $msgTknUser[msgtoken] = uname
 
-    body = {message_token: "#{msgtoken}", stream_token: "#{strtoken}"}
+    body = {message_token: msgtoken, stream_token: strtoken}
     headers 'Content-Type' => 'application/json'
     return [201, body.to_json]
   rescue =>e
@@ -138,22 +149,35 @@ end
 #----- /message Endpoint -------
 
 post '/message' do
+  authorization = request.env['HTTP_AUTHORIZATION'].split(' ', 2)
+  
+  if authorization.size<2   ||  authorization[0]!=('Bearer')||authorization[1].nil?()||authorization[1].empty?()||request.params['message'].nil?()||request.params['message'].empty?()
+    return [422,"Wrong message format"]
+  end
 
-  puts 'Headers'
-  PP.pp(request.env.filter { |x| x.start_with?('HTTP_') })
+  msgToken = authorization[1]
+  user = $msgTknUser[msgToken]
+  strToken = $stokens[user]
+  streamObj = $streams[strToken]
 
-  puts 'request.params:'
-  PP.pp request.params
+  if(streamObj.nil?())
+    return [409,"No open stream for the user" + user]
+  end
 
-  [403, "POST /message\n"]
-end
+  if(strToken.match /^\h{64}$/).nil?
+    return [403,"Invalid signed token"]
+  end
 
-#------- Options endpoint ---------
+  message = request.params['message']
+  newMsgToken = SecureRandom.hex
+  $msgTknUser.delete(msgToken)
+  $msgTknUser[newMsgToken] = user
 
-options '/message' do
-  PP.pp("-- options --")
-  PP.pp(params)
-  PP.pp(request.env)
-  #PP.pp(request.env)
-  [404,"not found"]
+  connections.each do |connection|
+    sse_event(connection, "Message",user, message)  #Message sse event
+  end
+
+  body = {Token: newMsgToken, stream_token: strToken}
+  headers 'Content-Type' => 'application/json'
+  return [201,body.to_json]
 end
