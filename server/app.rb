@@ -22,16 +22,16 @@ options "*" do
 end
 
 SCHEDULE_TIME = 32
-$users = Hash.new() # username vs password
+$user_list = Hash.new() # username vs password
 $streams = Hash.new() # stream token vs stream object
-$stokens = Hash.new() # username vs stream tokens
+$userStreamToken = Hash.new() # username vs stream tokens
 $msgTknUser  = Hash.new() # msg tokens vs userName
 $startTime = Time.now
-connections = []
+$connections = [] # Stream object array
 
 EventMachine.schedule do
   EventMachine.add_periodic_timer(SCHEDULE_TIME) do
-    connections.each do |connection|
+    $connections.each do |connection|
       sse_event(connection,'ServerStatus')
     end
   end
@@ -59,25 +59,33 @@ def sse_event(stream, event, username="", message="")
     data = {status: "Server uptime: "+(Time.now - $startTime).round().to_s+" seconds", created: timestamp()}
     stream << "event: ServerStatus\n" << "data: "<< data.to_json << "\n" << "id: " << SecureRandom.uuid << "\n\n"
   when 'Users'
-    data = {users: $stokens.keys(), created: timestamp()}
+    data = {users: $userStreamToken.keys(), created: timestamp()}
     stream << "event: Users\n" << "data: "<< data.to_json << "\n" << "id: " << SecureRandom.uuid << "\n\n"
   else
     stream << "event: error\n"<< SecureRandom.uuid << "\n\n"
   end 
 end
 
-
+def disconnect(connection, token, username)
+  sse_event(connection, "Disconnect")    #Disconnect sse event
+  $connections.delete(connection)
+  connection.close()
+  $streams.delete(token)
+  $connections.each do |conn|
+    sse_event(conn, "Part", username)  #Part sse event
+  end
+end
 #----- /stream Endpoint -------
 
 get '/stream/:token', provides: 'text/event-stream' do
   headers 'Access-Control-Allow-Origin' => '*'
 
   token = params['token']
-  if($stokens.key(token) == nil)
+  if($userStreamToken.key(token) == nil)
     return [403, 'Invalid stream token']
   end
 
-  username = $stokens.key(token)
+  username = $userStreamToken.key(token)
 
   if($streams[token] != nil&&!$streams[token].closed?())
     return [409, 'Connection already exists!']
@@ -86,24 +94,19 @@ get '/stream/:token', provides: 'text/event-stream' do
 
   stream(:keep_open) do |connection|
 
-    connections << connection
+    $connections << connection
 
     if(request.env["HTTP_LAST_EVENT_ID"] == nil)
       $streams[token] = connection
       sse_event(connection, "Users", token)  # Users sse event
     end
 
-    connections.each do |connection|
+    $connections.each do |connection|
       sse_event(connection, "Join", username)  #Join sse event
     end
 
     connection.callback do
-      sse_event(connection, "Disconnect")    #Disconnect sse event
-      connections.delete(connection)
-      $streams.delete(token)
-      connections.each do |conn|
-        sse_event(conn, "Part", username)  #Part sse event
-      end
+      disconnect(connection, token, username)
     end
   end
 end
@@ -119,22 +122,22 @@ post '/login' do
       return [422, 'Empty username/password']
     end
 
-    if($stokens[uname] != nil)
+    if($userStreamToken[uname] != nil)
       return [409, 'Multiple login tabs']
     end
 
-    if($users.has_key?(uname))
-      stored_pwd = $users[uname]
+    if($user_list.has_key?(uname))
+      stored_pwd = $user_list[uname]
       if(stored_pwd != pwd)
         return [403, 'Invalid username/password']
       end
     else
-      $users[uname] = pwd
+      $user_list[uname] = pwd
     end
 
     strtoken = SecureRandom.hex(32)
     msgtoken = SecureRandom.hex
-    $stokens[uname] = strtoken
+    $userStreamToken[uname] = strtoken
     $msgTknUser[msgtoken] = uname
 
     body = {message_token: msgtoken, stream_token: strtoken}
@@ -158,7 +161,7 @@ post '/message' do
 
   msgToken = authorization[1]
   user = $msgTknUser[msgToken]
-  strToken = $stokens[user]
+  strToken = $userStreamToken[user]
   streamObj = $streams[strToken]
 
   if(streamObj.nil?())
@@ -170,11 +173,16 @@ post '/message' do
   end
 
   message = request.params['message']
+  if(message.eql?("/quit"))
+    disconnect(streamObj, strToken, user)
+  end
+
   newMsgToken = SecureRandom.hex
   $msgTknUser.delete(msgToken)
   $msgTknUser[newMsgToken] = user
 
-  connections.each do |connection|
+  #Send msg to all user streams
+  $connections.each do |connection|
     sse_event(connection, "Message",user, message)  #Message sse event
   end
 
