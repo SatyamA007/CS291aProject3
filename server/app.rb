@@ -25,7 +25,7 @@ SCHEDULE_TIME = 32
 $user_list = Hash.new() # username vs password
 $streams = Hash.new() # stream token vs stream object
 $userStreamToken = Hash.new() # username vs stream tokens
-$msgTknUser  = Hash.new() # msg tokens vs userName
+$userMsgToken  = Hash.new() # username vs msg tokens
 $startTime = Time.now
 $connections = [] # Stream object array
 $messageQ = []
@@ -89,7 +89,7 @@ def sse_event(stream, event, username="", message="")
     stream << "event: error\n"<< SecureRandom.uuid << "\n\n"
   end 
   
-  if streamMessage!=""
+  if streamMessage != ""
     stream << streamMessage
     messageQput(streamMessage) unless !$messageQ.empty?()&&$messageQ.last.split("\n")[1]==streamMessage.split("\n")[1];    
   end
@@ -100,6 +100,10 @@ def disconnectAndPart(connection, token, username, allowRetry = true)
   $connections.delete(connection)
   connection.close()
   $streams.delete(token)
+  $user_list.delete(username)
+  $userStreamToken.delete(username)
+  $userMsgToken.delete(username)
+
   $connections.each do |conn|
     sse_event(conn, "Part", username)  #Part sse event
   end
@@ -128,7 +132,7 @@ get '/stream/:token', provides: 'text/event-stream' do
         messageQget(connection)
       end
       $streams[token] = connection
-      sse_event(connection, "Users", token)  # Users sse event     
+      sse_event(connection, "Users", token)  # Users sse event
     end
 
     $connections.each do |connection|
@@ -168,7 +172,7 @@ post '/login' do
     strtoken = SecureRandom.hex(32)
     msgtoken = SecureRandom.hex
     $userStreamToken[uname] = strtoken
-    $msgTknUser[msgtoken] = uname
+    $userMsgToken[uname] = msgtoken
 
     body = {message_token: msgtoken, stream_token: strtoken}
     headers 'Content-Type' => 'application/json'
@@ -190,14 +194,14 @@ post '/message' do
   end
 
   msgToken = authorization[1]
-  if !$msgTknUser.has_key?(msgToken)
+  if !$userMsgToken.has_value?(msgToken)
     return [403,"Invalid message token"]
   end
 
-  user = $msgTknUser[msgToken]
+  user = $userMsgToken.key(msgToken)
   strToken = $userStreamToken[user]
   streamObj = $streams[strToken]
-  cond409 = streamObj.nil?()||streamObj.closed?()
+  cond409 = streamObj.nil?() || streamObj.closed?()
 
   message = request.params['message']
   if(message.eql?("/quit"))
@@ -205,12 +209,10 @@ post '/message' do
   end
 
   newMsgToken = SecureRandom.hex
-  $msgTknUser.delete(msgToken)
-  $msgTknUser[newMsgToken] = user
-
+  $userMsgToken[user] = newMsgToken
   
   #Send msg to all user streams
-  unless (message.eql?("/quit")||cond409)
+  unless (message.eql?("/quit") || cond409)
     $connections.each do |connection| 
       sse_event(connection, "Message",user, message)  #Message sse event
     end
