@@ -149,10 +149,11 @@ end
 #----- /message Endpoint -------
 
 post '/message' do
+  headers 'Access-Control-Expose-Headers' => 'token'
   authorization = request.env['HTTP_AUTHORIZATION'].split(' ', 2)
   
-  if authorization.size<2   ||  authorization[0]!=('Bearer')||authorization[1].nil?()||authorization[1].empty?()||request.params['message'].nil?()||request.params['message'].empty?()
-    return [422,"Wrong message format"]
+  if authorization.size < 2 || authorization[0] != ('Bearer') || authorization[1].nil?() || authorization[1].empty?() || request.params['message'].nil?() || request.params['message'].empty?()
+    return [422, "Wrong message format"]
   end
 
   msgToken = authorization[1]
@@ -177,7 +178,7 @@ post '/message' do
     sse_event(connection, "Message",user, message)  #Message sse event
   end
 
-  body = {Token: newMsgToken, stream_token: strToken}
-  headers 'Content-Type' => 'application/json'
-  return [201,body.to_json]
+  headers 'Content-Type' => 'text/html; charset=utf-8'
+  headers 'Token' => newMsgToken
+  return [201, "CREATED"]
 end
