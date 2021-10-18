@@ -42,11 +42,6 @@ def timestamp
   Time.now.to_i
 end
 
-def date_format(timestamp) 
-  time = Time.at(timestamp)
-  return time.strftime("%m/%d/%Y") + " " + time.strftime("%I:%M %p");
-end
-
 def messageQput(newMessage)
   if $messageQ.size()<100
     $messageQ.push(newMessage)
@@ -72,6 +67,7 @@ def sse_event(stream, event, username="", message="")
   when 'Disconnect'
     data = {created: timestamp()}
     stream << "event: Disconnect\n" << "data: "<< data.to_json << "\n" << "id: " << SecureRandom.uuid << "\n\n"
+    $userStreamToken.delete(username)
   when 'Message'
     data = {message: message,user: username, created: timestamp()}
     streamMessage = "event: Message\n" + "data: "+ data.to_json + "\n" + "id: " + SecureRandom.uuid + "\n\n"
@@ -97,6 +93,7 @@ end
 
 def disconnectAndPart(connection, token, username, allowRetry = true)
   sse_event(connection, "Disconnect", username)  unless allowRetry #Disconnect sse event
+  sse_event(connection, "Part", username) #Part sse event before closing connection
   $connections.delete(connection)
   connection.close()
   $streams.delete(token)
@@ -120,14 +117,11 @@ get '/stream/:token', provides: 'text/event-stream' do
   end
 
   stream(:keep_open) do |connection|
-
     $connections << connection
-
-    if(request.env["HTTP_LAST_EVENT_ID"] == nil)
-      if $streams[token] == nil
-        messageQget(connection)
-      end
-      $streams[token] = connection
+    $streams[token] = connection
+      
+    if(request.env["HTTP_LAST_EVENT_ID"] == nil)      
+      messageQget(connection) if $streams[token].nil?|| $streams[token].closed?
       sse_event(connection, "Users", token)  # Users sse event     
     end
 
@@ -198,23 +192,24 @@ post '/message' do
   strToken = $userStreamToken[user]
   streamObj = $streams[strToken]
   cond409 = streamObj.nil?()||streamObj.closed?()
-
   message = request.params['message']
-  if(message.eql?("/quit"))
-    disconnectAndPart(streamObj, strToken, user, false)
-  end
-
-  newMsgToken = SecureRandom.hex
-  $msgTknUser.delete(msgToken)
-  $msgTknUser[newMsgToken] = user
-
   
-  #Send msg to all user streams
-  unless (message.eql?("/quit")||cond409)
+  case message    
+  when "/quit"
+    disconnectAndPart(streamObj, strToken, user, false) unless cond409
+  when "/reconnect"
+    disconnectAndPart(streamObj, strToken, user) unless cond409
+  else
+    #Send msg to all user streams
     $connections.each do |connection| 
       sse_event(connection, "Message",user, message)  #Message sse event
     end
   end
+
+  #rotating the messageToken
+  newMsgToken = SecureRandom.hex
+  $msgTknUser.delete(msgToken)
+  $msgTknUser[newMsgToken] = user
 
   headers 'Content-Type' => 'text/html; charset=utf-8'
   headers 'Token' => newMsgToken
