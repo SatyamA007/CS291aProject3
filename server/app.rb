@@ -28,7 +28,7 @@ $userStreamToken = Hash.new() # username vs stream tokens
 $msgTknUser  = Hash.new() # msg tokens vs userName
 $startTime = Time.now
 $connections = [] # Stream object array
-$messageQ = []
+$messageQ = ["event: ServerStatus\n" + "data: "+ {status: "Server started: Welcome to the Low-Budget Whatsapp server!", created: Time.now.to_i}.to_json + "\n" + "id: " + SecureRandom.uuid + "\n\n"]
 
 EventMachine.schedule do
   EventMachine.add_periodic_timer(SCHEDULE_TIME) do
@@ -40,6 +40,10 @@ end
 
 def timestamp
   Time.now.to_i
+end
+
+def getUserList
+  $userStreamToken.keys().select { |uname| !$streams[$userStreamToken[uname]].nil?}
 end
 
 def messageQput(newMessage)
@@ -55,6 +59,18 @@ def messageQget(stream)
   for message in $messageQ
     stream << message
   end    
+end
+
+def sse_kick(user1, user2, stream2, strToken2)
+  sse_event(stream2, "Part", user2) 
+  $connections.delete(stream2)
+  stream2.close()
+  $streams.delete(strToken2)
+  data = {status: user1+" kicked "+user2, created: timestamp()}
+  $connections.each do |conn|
+    conn << "event: ServerStatus\n" << "data: "<< data.to_json << "\n" << "id: " << SecureRandom.uuid << "\n\n"
+  end
+  messageQput("event: ServerStatus\n" + "data: "+ data.to_json + "\n" + "id: " + SecureRandom.uuid + "\n\n")
 end
 
 def sse_event(stream, event, username="", message="")
@@ -79,7 +95,7 @@ def sse_event(stream, event, username="", message="")
     data = {status: statusText, created: timestamp()}
     streamMessage = "event: ServerStatus\n" + "data: "+ data.to_json + "\n" + "id: " + SecureRandom.uuid + "\n\n"
   when 'Users'
-    data = {users: $userStreamToken.keys().select { |uname| !$streams[$userStreamToken[uname]].nil? }, created: timestamp()}
+    data = {users: getUserList(), created: timestamp()}
     stream << "event: Users\n" << "data: "<< data.to_json << "\n" << "id: " << SecureRandom.uuid << "\n\n"
   else
     stream << "event: error\n"<< SecureRandom.uuid << "\n\n"
@@ -200,9 +216,21 @@ post '/message' do
   when "/reconnect"
     disconnectAndPart(streamObj, strToken, user) unless cond409
   else
-    #Send msg to all user streams
-    $connections.each do |connection| 
-      sse_event(connection, "Message",user, message)  #Message sse event
+    if message.start_with?("/kick")
+      user2 = message.delete_prefix("/kick ")
+      if getUserList().include?(user2)&&user2!=user&& !cond409
+        strToken2 = $userStreamToken[user2]
+        streamObj2 = $streams[strToken2]
+        sse_kick(user,user2,streamObj2,strToken2)
+      else
+        cond409 = true
+      end
+
+    else
+      #Send msg to all user streams
+      $connections.each do |connection| 
+        sse_event(connection, "Message",user, message)  #Message sse event
+      end
     end
   end
 
