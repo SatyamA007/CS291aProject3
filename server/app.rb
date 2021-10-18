@@ -121,7 +121,7 @@ get '/stream/:token', provides: 'text/event-stream' do
     $streams[token] = connection
       
     if(request.env["HTTP_LAST_EVENT_ID"] == nil)      
-      messageQget(connection) if $streams[token].nil?|| $streams[token].closed?
+      messageQget(connection) 
       sse_event(connection, "Users", token)  # Users sse event     
     end
 
