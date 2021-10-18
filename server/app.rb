@@ -93,7 +93,7 @@ end
 
 def disconnectAndPart(connection, token, username, allowRetry = true)
   sse_event(connection, "Disconnect", username)  unless allowRetry #Disconnect sse event
-  sse_event(connection, "Part", username) #Part sse event before closing connection
+  sse_event(connection, "Part", username) if allowRetry            #Part sse event before closing connection
   $connections.delete(connection)
   connection.close()
   $streams.delete(token)
