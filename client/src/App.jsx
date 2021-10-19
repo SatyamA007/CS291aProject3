@@ -88,7 +88,7 @@ class App extends Component {
     this.stream.addEventListener(
         "Disconnect",
         ()=> {
-            this.close();
+            instance2.stream.close();//wrong, change!!
             instance2.handle_disconnect(true);
             instance2.messageToken = null;
             instance2.streamToken = null;

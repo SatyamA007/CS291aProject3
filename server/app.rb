@@ -21,19 +21,21 @@ options "*" do
   200
 end
 
-SCHEDULE_TIME = 32
+SCHEDULE_TIME = 1*60*60
 $user_list = Hash.new() # username vs password
 $streams = Hash.new() # stream token vs stream object
 $userStreamToken = Hash.new() # username vs stream tokens
-$msgTknUser  = Hash.new() # msg tokens vs userName
+$userMsgToken  = Hash.new() # userName vs msg tokens 
 $startTime = Time.now
 $connections = [] # Stream object array
+#convert to hashMap of event-id,message
 $messageQ = ["event: ServerStatus\n" + "data: "+ {status: "Server started: Welcome to the Low-Budget Whatsapp server!", created: Time.now.to_i}.to_json + "\n" + "id: " + SecureRandom.uuid + "\n\n"]
 
 EventMachine.schedule do
   EventMachine.add_periodic_timer(SCHEDULE_TIME) do
+    eventId = SecureRandom.uuid
     $connections.each do |connection|
-      sse_event(connection,'ServerStatus')
+      sse_event(connection,'ServerStatus', eventId=eventId)
     end
   end
 end
@@ -67,43 +69,45 @@ def sse_kick(user1, user2, stream2, strToken2)
   stream2.close()
   $streams.delete(strToken2)
   data = {status: user1+" kicked "+user2, created: timestamp()}
+  eventId = SecureRandom.uuid
   $connections.each do |conn|
-    conn << "event: ServerStatus\n" << "data: "<< data.to_json << "\n" << "id: " << SecureRandom.uuid << "\n\n"
+    conn << "data: "<< data.to_json << "\n" << "event: ServerStatus\n" << "id: " << eventId << "\n\n"
   end
-  messageQput("event: ServerStatus\n" + "data: "+ data.to_json + "\n" + "id: " + SecureRandom.uuid + "\n\n")
+  messageQput("event: ServerStatus\n" + "data: "+ data.to_json + "\n" + "id: " + eventId + "\n\n")
 end
 
-def sse_event(stream, event, username="", message="")
+def sse_event(stream, event, username="", message="", eventId=SecureRandom.uuid)
   streamMessage = ""
 
   case event
   when 'Join'
     data = {user: username, created: timestamp()}
-    streamMessage = "event: Join\n" + "data: "+ data.to_json + "\n" + "id: " + SecureRandom.uuid + "\n\n"    
+    streamMessage = "data: "+ data.to_json + "\n" + "event: Join\n" + "id: " + eventId + "\n\n"    
   when 'Disconnect'
     data = {created: timestamp()}
-    stream << "event: Disconnect\n" << "data: "<< data.to_json << "\n" << "id: " << SecureRandom.uuid << "\n\n"
-    $userStreamToken.delete(username)
+    stream << "data: "<< data.to_json << "\n" << "event: Disconnect\n" << "id: " << eventId << "\n\n"
+    #$userStreamToken.delete(username)
   when 'Message'
     data = {message: message,user: username, created: timestamp()}
-    streamMessage = "event: Message\n" + "data: "+ data.to_json + "\n" + "id: " + SecureRandom.uuid + "\n\n"
+    streamMessage = "data: "+ data.to_json + "\n" + "event: Message\n" + "id: " + eventId + "\n\n"
   when 'Part'
     data = {user: username, created: timestamp()}
-    streamMessage = "event: Part\n" + "data: "+ data.to_json + "\n" + "id: " + SecureRandom.uuid + "\n\n"
+    streamMessage = "data: "+ data.to_json + "\n" + "event: Part\n" + "id: " + eventId + "\n\n"
   when 'ServerStatus'
-    statusText =  "Server uptime: "+(Time.now - $startTime).round().to_s+" seconds"
+    statusText =  "Server uptime: "+(Time.now - $startTime).round().to_s+" hours"
     data = {status: statusText, created: timestamp()}
-    streamMessage = "event: ServerStatus\n" + "data: "+ data.to_json + "\n" + "id: " + SecureRandom.uuid + "\n\n"
+    streamMessage = "data: "+ data.to_json + "event: ServerStatus\n" + "\n" + "id: " + eventId + "\n\n"
   when 'Users'
     data = {users: getUserList(), created: timestamp()}
-    stream << "event: Users\n" << "data: "<< data.to_json << "\n" << "id: " << SecureRandom.uuid << "\n\n"
+    stream << "data: "<< data.to_json << "\n" << "event: Users\n" << "id: " << eventId << "\n\n"
   else
-    stream << "event: error\n"<< SecureRandom.uuid << "\n\n"
+    stream << "event: error\n"<< eventId << "\n\n"
   end 
   
   if streamMessage!=""
     stream << streamMessage
-    messageQput(streamMessage) unless !$messageQ.empty?()&&$messageQ.last.split("\n")[1]==streamMessage.split("\n")[1];    
+    #remove join and part
+    messageQput(streamMessage) unless !$messageQ.empty?()&&$messageQ.last.split("\n")[2]==streamMessage.split("\n")[2];    
   end
 end
 
@@ -113,8 +117,9 @@ def disconnectAndPart(connection, token, username, allowRetry = true)
   $connections.delete(connection)
   connection.close()
   $streams.delete(token)
+  eventId = SecureRandom.uuid
   $connections.each do |conn|
-    sse_event(conn, "Part", username)  #Part sse event
+    sse_event(conn, "Part", username, eventId=eventId)  #Part sse event
   end
 end
 #----- /stream Endpoint -------
@@ -140,9 +145,9 @@ get '/stream/:token', provides: 'text/event-stream' do
       messageQget(connection) 
       sse_event(connection, "Users", token)  # Users sse event     
     end
-
+    eventId = SecureRandom.uuid
     $connections.each do |connection|
-      sse_event(connection, "Join", username)  #Join sse event
+      sse_event(connection, "Join", username, eventId=eventId)  #Join sse event
     end
 
     connection.callback do
@@ -158,7 +163,8 @@ post '/login' do
     uname = params[:username]
     pwd = params[:password]
 
-    if(uname == '' || pwd == '')
+
+    if(uname == '' || pwd == '')||!(params.keys.length==2&&(params.has_key?(:username)&&params.has_key?(:password)))
       return [422, 'Empty username/password']
     end
 
@@ -178,7 +184,7 @@ post '/login' do
     strtoken = SecureRandom.hex(32)
     msgtoken = SecureRandom.hex
     $userStreamToken[uname] = strtoken
-    $msgTknUser[msgtoken] = uname
+    $userMsgToken[uname] = msgtoken
 
     body = {message_token: msgtoken, stream_token: strtoken}
     headers 'Content-Type' => 'application/json'
@@ -193,55 +199,67 @@ end
 
 post '/message' do
   headers 'Access-Control-Expose-Headers' => 'token'
-  authorization = request.env['HTTP_AUTHORIZATION'].split(' ', 2)
+  authorization = request.env['HTTP_AUTHORIZATION']
+  return [403, "Empty header"] if authorization.nil?
+
+  authorization =  authorization.split(' ')
+  #add check for extra headers
+  if authorization.size != 2 || authorization[0] != ('Bearer') || authorization[1].nil?() || authorization[1].empty?()
+    return [403, "Wrong header format"]
+  end
   
-  if authorization.size < 2 || authorization[0] != ('Bearer') || authorization[1].nil?() || authorization[1].empty?() || request.params['message'].nil?() || request.params['message'].empty?()
+  if request.params['message'].nil? || request.params['message']==""||!(request.params.keys.length==1&&request.params.has_key?('message'))
     return [422, "Wrong message format"]
   end
 
   msgToken = authorization[1]
-  if !$msgTknUser.has_key?(msgToken)
+  if !$userMsgToken.has_value?(msgToken)
     return [403,"Invalid message token"]
   end
 
-  user = $msgTknUser[msgToken]
+  user = $userMsgToken.key(msgToken)
   strToken = $userStreamToken[user]
   streamObj = $streams[strToken]
   cond409 = streamObj.nil?()||streamObj.closed?()
-  message = request.params['message']
+  return [409,"No open stream for the user " + user] if cond409
   
+  message = request.params['message']
+
   case message    
   when "/quit"
-    disconnectAndPart(streamObj, strToken, user, false) unless cond409
+    disconnectAndPart(streamObj, strToken, user, false)
+    eventId = SecureRandom.uuid
+    $connections.each do |conn|
+      sse_event(conn, "Users", eventId=eventId)  #Users sse event
+    end
   when "/reconnect"
-    disconnectAndPart(streamObj, strToken, user) unless cond409
+    disconnectAndPart(streamObj, strToken, user) 
   else
     if message.start_with?("/kick")
       user2 = message.delete_prefix("/kick ")
-      if getUserList().include?(user2)&&user2!=user&& !cond409
+      if getUserList().include?(user2)&&user2!=user
         strToken2 = $userStreamToken[user2]
         streamObj2 = $streams[strToken2]
         sse_kick(user,user2,streamObj2,strToken2)
       else
-        cond409 = true
+        return [409,"Cannot kick yourself or offline users" + user]
       end
 
     else
       #Send msg to all user streams
+      eventId = SecureRandom.uuid
       $connections.each do |connection| 
-        sse_event(connection, "Message",user, message)  #Message sse event
+        sse_event(connection, "Message",user, message, eventId=eventId)  #Message sse event
       end
     end
   end
 
   #rotating the messageToken
   newMsgToken = SecureRandom.hex
-  $msgTknUser.delete(msgToken)
-  $msgTknUser[newMsgToken] = user
+  $userMsgToken[user] = newMsgToken
 
   headers 'Content-Type' => 'text/html; charset=utf-8'
   headers 'Token' => newMsgToken
   
-  return [409,"No open stream for the user " + user] if cond409
   return [201, "CREATED"]
 end
