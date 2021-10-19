@@ -28,8 +28,9 @@ $userStreamToken = Hash.new() # username vs stream tokens
 $userMsgToken  = Hash.new() # userName vs msg tokens 
 $startTime = Time.now
 $connections = [] # Stream object array
-#convert to hashMap of event-id,message
-$messageQ = ["event: ServerStatus\n" + "data: "+ {status: "Server started: Welcome to the Low-Budget Whatsapp server!", created: Time.now.to_i}.to_json + "\n" + "id: " + SecureRandom.uuid + "\n\n"]
+
+$messageIds = [SecureRandom.uuid]
+$messageQ = { $messageIds[-1] => "data: "+ {status: "Server started: Welcome to the Low-Budget Whatsapp server!", created: Time.now.to_i}.to_json + "\n" + "event: ServerStatus\n" + "id: " + $messageIds[-1] + "\n\n"}
 
 EventMachine.schedule do
   EventMachine.add_periodic_timer(SCHEDULE_TIME) do
@@ -48,23 +49,26 @@ def getUserList
   $userStreamToken.keys().select { |uname| !$streams[$userStreamToken[uname]].nil?}
 end
 
-def messageQput(newMessage)
-  if $messageQ.size()<100
-    $messageQ.push(newMessage)
+def messageQput(newMessage, id)
+  if $messageIds.size()<=100
+    $messageQ[id]=newMessage
+    $messageIds.push(id)
   else 
-    $messageQ.push(newMessage)
-    $messageQ.shift()
+    shifted = $messageIds.shift
+    $messageQ.delete(shifted)
   end
 end
 
-def messageQget(stream)
-  for message in $messageQ
-    stream << message
-  end    
+def messageQget(stream, lastEventId)
+  index = 0 
+  index = $messageIds.index(lastEventId)+1  if !lastEventId.nil?&&$messageIds.include?(lastEventId)
+
+  for i in index...$messageIds.length do
+    stream << $messageQ[$messageIds[i]]
+  end  
 end
 
 def sse_kick(user1, user2, stream2, strToken2)
-  sse_event(stream2, "Part", user2) 
   $connections.delete(stream2)
   stream2.close()
   $streams.delete(strToken2)
@@ -76,7 +80,7 @@ def sse_kick(user1, user2, stream2, strToken2)
   messageQput("event: ServerStatus\n" + "data: "+ data.to_json + "\n" + "id: " + eventId + "\n\n")
 end
 
-def sse_event(stream, event, username="", message="", eventId=SecureRandom.uuid)
+def sse_event(stream, event, eventId, username="", message="")
   streamMessage = ""
 
   case event
@@ -86,7 +90,6 @@ def sse_event(stream, event, username="", message="", eventId=SecureRandom.uuid)
   when 'Disconnect'
     data = {created: timestamp()}
     stream << "data: "<< data.to_json << "\n" << "event: Disconnect\n" << "id: " << eventId << "\n\n"
-    #$userStreamToken.delete(username)
   when 'Message'
     data = {message: message,user: username, created: timestamp()}
     streamMessage = "data: "+ data.to_json + "\n" + "event: Message\n" + "id: " + eventId + "\n\n"
@@ -107,19 +110,19 @@ def sse_event(stream, event, username="", message="", eventId=SecureRandom.uuid)
   if streamMessage!=""
     stream << streamMessage
     #remove join and part
-    messageQput(streamMessage) unless !$messageQ.empty?()&&$messageQ.last.split("\n")[2]==streamMessage.split("\n")[2];    
+    messageQput(streamMessage, eventId) unless $messageIds[-1]==eventId;    
   end
 end
 
 def disconnectAndPart(connection, token, username, allowRetry = true)
-  sse_event(connection, "Disconnect", username)  unless allowRetry #Disconnect sse event
-  sse_event(connection, "Part", username) if allowRetry            #Part sse event before closing connection
+  sse_event(connection, "Disconnect", SecureRandom.uuid, username=username)  unless allowRetry #Disconnect sse event
+  sse_event(connection, "Part", SecureRandom.uuid, username=username)   if allowRetry          #Part sse event before closing connection
   $connections.delete(connection)
   connection.close()
   $streams.delete(token)
   eventId = SecureRandom.uuid
   $connections.each do |conn|
-    sse_event(conn, "Part", username, eventId=eventId)  #Part sse event
+    sse_event(conn, "Part", eventId, username=username)   #Part sse event
   end
 end
 #----- /stream Endpoint -------
@@ -142,12 +145,13 @@ get '/stream/:token', provides: 'text/event-stream' do
     $streams[token] = connection
       
     if(request.env["HTTP_LAST_EVENT_ID"] == nil)      
-      messageQget(connection) 
-      sse_event(connection, "Users", token)  # Users sse event     
+      sse_event(connection, "Users", eventId=SecureRandom.uuid)  # Users sse event    
     end
+    messageQget(connection, request.env["HTTP_LAST_EVENT_ID"])
+
     eventId = SecureRandom.uuid
     $connections.each do |connection|
-      sse_event(connection, "Join", username, eventId=eventId)  #Join sse event
+      sse_event(connection, "Join", eventId=eventId, username=username)  #Join sse event
     end
 
     connection.callback do
@@ -203,7 +207,6 @@ post '/message' do
   return [403, "Empty header"] if authorization.nil?
 
   authorization =  authorization.split(' ')
-  #add check for extra headers
   if authorization.size != 2 || authorization[0] != ('Bearer') || authorization[1].nil?() || authorization[1].empty?()
     return [403, "Wrong header format"]
   end
@@ -230,7 +233,7 @@ post '/message' do
     disconnectAndPart(streamObj, strToken, user, false)
     eventId = SecureRandom.uuid
     $connections.each do |conn|
-      sse_event(conn, "Users", eventId=eventId)  #Users sse event
+      sse_event(conn, "Users", eventId)  #Users sse event
     end
   when "/reconnect"
     disconnectAndPart(streamObj, strToken, user) 
@@ -249,7 +252,7 @@ post '/message' do
       #Send msg to all user streams
       eventId = SecureRandom.uuid
       $connections.each do |connection| 
-        sse_event(connection, "Message",user, message, eventId=eventId)  #Message sse event
+        sse_event(connection, "Message",eventId, username=user, message=message)  #Message sse event
       end
     end
   end
