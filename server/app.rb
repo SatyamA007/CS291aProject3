@@ -36,7 +36,7 @@ EventMachine.schedule do
   EventMachine.add_periodic_timer(SCHEDULE_TIME) do
     eventId = SecureRandom.uuid
     $connections.each do |connection|
-      sse_event(connection,'ServerStatus', eventId=eventId)
+      sse_event(connection,'ServerStatus', eventId)
     end
   end
 end
@@ -103,24 +103,24 @@ def sse_event(stream, event, eventId, username="", message="")
     data = {users: getUserList(), created: timestamp()}
     stream << "data: "<< data.to_json << "\n" << "event: Users\n" << "id: " << eventId << "\n\n"
   else
-    stream << "event: error\n"<< eventId << "\n\n"
+    stream << "event: error\n" << eventId << "\n\n"
   end 
 
-  if streamMessage!=""
+  if streamMessage != ""
     stream << streamMessage
-    messageQput(streamMessage, eventId) unless $messageIds[-1]==eventId;    
+    messageQput(streamMessage, eventId) unless $messageIds[-1] == eventId;
   end
 end
 
 def disconnectAndPart(connection, token, username, allowRetry = true)
-  sse_event(connection, "Disconnect", SecureRandom.uuid, username=username)  unless allowRetry #Disconnect sse event
-  sse_event(connection, "Part", SecureRandom.uuid, username=username)   if allowRetry          #Part sse event before closing connection
+  sse_event(connection, "Disconnect", SecureRandom.uuid, username)  unless allowRetry #Disconnect sse event
+  sse_event(connection, "Part", SecureRandom.uuid, username)   if allowRetry          #Part sse event before closing connection
   $connections.delete(connection)
   connection.close()
   $streams.delete(token)
   eventId = SecureRandom.uuid
   $connections.each do |conn|
-    sse_event(conn, "Part", eventId, username=username)   #Part sse event
+    sse_event(conn, "Part", eventId, username)   #Part sse event
   end
 end
 
@@ -135,7 +135,7 @@ get '/stream/:token', provides: 'text/event-stream' do
 
   username = $userStreamToken.key(token)
 
-  if($streams[token] != nil&&!$streams[token].closed?())
+  if($streams[token] != nil && !$streams[token].closed?())
     return [409, 'Connection already exists!']
   end
 
@@ -149,7 +149,7 @@ get '/stream/:token', provides: 'text/event-stream' do
 
     eventId = SecureRandom.uuid
     $connections.each do |connection|
-      sse_event(connection, "Join", eventId=eventId, username=username)  #Join sse event
+      sse_event(connection, "Join", eventId, username)  #Join sse event
     end
 
     connection.callback do
@@ -243,7 +243,7 @@ post '/message' do
       #Send msg to all user streams
       eventId = SecureRandom.uuid
       $connections.each do |connection| 
-        sse_event(connection, "Message", eventId, username=user, message=message)  #Message sse event
+        sse_event(connection, "Message", eventId, user, message)  #Message sse event
       end
     end
   end
