@@ -2,6 +2,10 @@
 
 import { Component } from "react";
 import "./App.css";
+import {LoginForm, start_stream} from "./components/LoginForm.jsx";
+import {UserList} from "./components/UserList.jsx";
+import {MessageList} from "./components/MessageList.jsx";
+import {Compose} from "./components/Compose.jsx";
 
 let instance = null;
 class App extends Component {
@@ -70,95 +74,11 @@ class App extends Component {
         this.handle_disconnect(true);
         this.show_login();
     } else {
-        this.start_stream();
+        start_stream();
     }
   }
 
-  start_stream() {
-    const instance2 = instance;
-    this.stream = new EventSource(
-        sessionStorage.getItem("url") + "/stream/" + this.streamToken
-    );
-    this.stream.addEventListener(
-        "open",
-        ()=> {
-            instance2.handle_connect();
-        }
-    );
-    this.stream.addEventListener(
-        "Disconnect",
-        ()=> {
-            instance2.stream.close();//wrong, change!!
-            instance2.handle_disconnect(true);
-            instance2.messageToken = null;
-            instance2.streamToken = null;
-            instance2.chat.innerHTML = "";
-            instance2.show_login();
-        },
-        false
-    );
-    this.stream.addEventListener(
-        "Join",
-        (event)=> {
-            var data = JSON.parse(event.data);
-            instance2.users.add(data.user);
-            instance2.update_users();
-            instance2.output(instance2.date_format(data["created"]) + " JOIN: " + data.user);
-        },
-        false
-    );
-    this.stream.addEventListener(
-        "Message",
-        (event)=> {
-            var data = JSON.parse(event.data);
-            instance2.output(instance2.date_format(data["created"]) + " (" + data.user + ") " + data.message);
-        },
-        false
-    );
-    this.stream.addEventListener(
-        "Part",
-        (event)=> {
-            var data = JSON.parse(event.data);
-            instance2.users.delete(data.user);
-            instance2.update_users();
-            instance2.output(instance2.date_format(data["created"]) + " PART: " + data.user);
-        },
-        false
-    );
-    this.stream.addEventListener(
-        "ServerStatus",
-        (event) =>{
-            var data = JSON.parse(event.data);
-            instance2.output(instance2.date_format(data["created"]) + " STATUS: " + data.status);
-        },
-        false
-    );
-    this.stream.addEventListener(
-        "Users",
-        (event) =>{            
-            const newArr = JSON.parse(event.data).users;
-            instance2.users = new Set(newArr);
-            instance2.update_users();
-        },
-        false
-    );
-    this.stream.addEventListener(
-        "error",
-        (event) =>{
-            if (event.target.readyState === 2) {
-                instance2.messageToken = null;
-                instance2.streamToken = null;
-                instance2.handle_disconnect(true);
-                instance2.show_login();
-            } else {
-                instance2.handle_disconnect(false);
-                console.log("Disconnected, retrying");
-            }
-        },
-        false
-    );
-}
-
+  
 login() {
     var request = new XMLHttpRequest();
     var form = new FormData();
@@ -176,7 +96,7 @@ login() {
             const data = JSON.parse(this.responseText);
             instance.messageToken = data.message_token;
             instance.streamToken = data.stream_token;
-            instance.start_stream();
+            start_stream();
         } else if (this.status === 403) {
             alert("Invalid username or password");
         } else if (this.status === 409) {
@@ -225,46 +145,21 @@ login() {
     return (
       <div>
         <title>Budget-Cut Whatsapp</title>
-
         <section id="container">
             <h1 id="title" ref={elem => this.title = elem} class="disconnected">Budget-Cut Whatsapp</h1>
-            <div id="window">
-                <div id="chat" ref={elem => this.chat = elem}>
-                    <ul>{(this.chats).map(item => (
-                        <li>
-                            {item} 
-                        </li> 
-                    ))}</ul>
-                </div>
+            <div id="window">                
+                <MessageList classref={this}/>
                 <div id="user_window">
                     <h2>Online</h2>
-                    <ul id="users" ref={elem => this.user_list = elem} >
-                        {Array.from(this.users).sort().map(item => (
-                        <li>
-                            {item} 
-                        </li> 
-                    ))}
-                    </ul>
+                    <UserList classref={this}/>
                 </div>
             </div>
-            <input id="message" onKeyUp={this.keyUpMessage} ref={elem => this.message = elem} type="text"/>
+            <Compose classref={this}/>
         </section>
-        <div id="login-modal" onKeyUp={this.keyUpLoginModal} ref={elem => this.login_modal = elem} >
-        <div class="content">
-            <h2>Login</h2>
-            <div>
-                <label>Chat URL <br /><input id="url" ref={elem => this.url = elem} type="text"/></label>
-            </div>
-            <div>
-                <label>Username <br /><input id="username" ref={elem => this.username = elem} type="text"/></label>
-            </div>
-            <div>
-                <label>Password <br /><input id="password" ref={elem => this.password = elem} type="password"/></label>
-            </div>
-        </div>
-        </div>
+        <LoginForm classref={this}/>
     </div>
     );
   }
 }
+
 export default App;

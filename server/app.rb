@@ -50,13 +50,12 @@ def getUserList
 end
 
 def messageQput(newMessage, id)
-  if $messageIds.size()<=100
-    $messageQ[id]=newMessage
-    $messageIds.push(id)
-  else 
+  if $messageIds.size()>100
     shifted = $messageIds.shift
     $messageQ.delete(shifted)
   end
+  $messageQ[id]=newMessage
+  $messageIds.push(id)
 end
 
 def messageQget(stream, lastEventId)
@@ -64,7 +63,7 @@ def messageQget(stream, lastEventId)
   index = $messageIds.index(lastEventId)+1  if !lastEventId.nil?&&$messageIds.include?(lastEventId)
 
   for i in index...$messageIds.length do
-    stream << $messageQ[$messageIds[i]]
+    stream << $messageQ[$messageIds[i]] unless $messageQ[$messageIds[i]].include?('Join')||$messageQ[$messageIds[i]].include?('Part')
   end  
 end
 
@@ -109,7 +108,6 @@ def sse_event(stream, event, eventId, username="", message="")
   
   if streamMessage!=""
     stream << streamMessage
-    #remove join and part
     messageQput(streamMessage, eventId) unless $messageIds[-1]==eventId;    
   end
 end
@@ -143,10 +141,10 @@ get '/stream/:token', provides: 'text/event-stream' do
   stream(:keep_open) do |connection|
     $connections << connection
     $streams[token] = connection
-      
-    if(request.env["HTTP_LAST_EVENT_ID"] == nil)      
-      sse_event(connection, "Users", eventId=SecureRandom.uuid)  # Users sse event    
-    end
+    
+    lastEventId = request.env["HTTP_LAST_EVENT_ID"]  
+    
+    sse_event(connection, "Users", eventId=SecureRandom.uuid)  if( lastEventId.nil? || !$messageIds.include?(lastEventId))      
     messageQget(connection, request.env["HTTP_LAST_EVENT_ID"])
 
     eventId = SecureRandom.uuid
@@ -233,7 +231,7 @@ post '/message' do
     disconnectAndPart(streamObj, strToken, user, false)
     eventId = SecureRandom.uuid
     $connections.each do |conn|
-      sse_event(conn, "Users", eventId)  #Users sse event
+      #sse_event(conn, "Users", eventId)  #Users sse event
     end
   when "/reconnect"
     disconnectAndPart(streamObj, strToken, user) 
