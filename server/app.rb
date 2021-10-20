@@ -50,11 +50,11 @@ def getUserList
 end
 
 def messageQput(newMessage, id)
-  if $messageIds.size()>100
+  if $messageIds.size() > 100
     shifted = $messageIds.shift
     $messageQ.delete(shifted)
   end
-  $messageQ[id]=newMessage
+  $messageQ[id] = newMessage
   $messageIds.push(id)
 end
 
@@ -105,7 +105,7 @@ def sse_event(stream, event, eventId, username="", message="")
   else
     stream << "event: error\n"<< eventId << "\n\n"
   end 
-  
+
   if streamMessage!=""
     stream << streamMessage
     messageQput(streamMessage, eventId) unless $messageIds[-1]==eventId;    
@@ -123,6 +123,7 @@ def disconnectAndPart(connection, token, username, allowRetry = true)
     sse_event(conn, "Part", eventId, username=username)   #Part sse event
   end
 end
+
 #----- /stream Endpoint -------
 
 get '/stream/:token', provides: 'text/event-stream' do
@@ -141,11 +142,10 @@ get '/stream/:token', provides: 'text/event-stream' do
   stream(:keep_open) do |connection|
     $connections << connection
     $streams[token] = connection
-    
-    lastEventId = request.env["HTTP_LAST_EVENT_ID"]  
-    
-    sse_event(connection, "Users", eventId=SecureRandom.uuid)  if( lastEventId.nil? || !$messageIds.include?(lastEventId))      
-    messageQget(connection, request.env["HTTP_LAST_EVENT_ID"])
+
+    lastEventId = request.env["HTTP_LAST_EVENT_ID"]
+    sse_event(connection, "Users", eventId=SecureRandom.uuid)  if(lastEventId.nil? || !$messageIds.include?(lastEventId))
+    messageQget(connection, lastEventId)
 
     eventId = SecureRandom.uuid
     $connections.each do |connection|
@@ -165,12 +165,11 @@ post '/login' do
     uname = params[:username]
     pwd = params[:password]
 
-
-    if(uname == '' || pwd == '')||!(params.keys.length==2&&(params.has_key?(:username)&&params.has_key?(:password)))
+    if(uname == '' || pwd == '') || !(params.keys.length == 2 && (params.has_key?(:username) && params.has_key?(:password)))
       return [422, 'Empty username/password']
     end
 
-    if $userStreamToken[uname] != nil && $streams[$userStreamToken[uname]]!=nil&&!$streams[$userStreamToken[uname]].closed?()
+    if $userStreamToken[uname] != nil && $streams[$userStreamToken[uname]] != nil && !$streams[$userStreamToken[uname]].closed?()
       return [409, 'User already logged in']
     end
 
@@ -209,48 +208,42 @@ post '/message' do
     return [403, "Wrong header format"]
   end
   
-  if request.params['message'].nil? || request.params['message']==""||!(request.params.keys.length==1&&request.params.has_key?('message'))
+  if request.params['message'].nil? || request.params['message'] == "" || !(request.params.keys.length == 1 && request.params.has_key?('message'))
     return [422, "Wrong message format"]
   end
 
   msgToken = authorization[1]
   if !$userMsgToken.has_value?(msgToken)
-    return [403,"Invalid message token"]
+    return [403, "Invalid message token"]
   end
 
   user = $userMsgToken.key(msgToken)
   strToken = $userStreamToken[user]
   streamObj = $streams[strToken]
-  cond409 = streamObj.nil?()||streamObj.closed?()
-  return [409,"No open stream for the user " + user] if cond409
+  cond409 = streamObj.nil?() || streamObj.closed?()
+  return [409, "No open stream for the user " + user] if cond409
   
   message = request.params['message']
-
   case message    
   when "/quit"
     disconnectAndPart(streamObj, strToken, user, false)
-    eventId = SecureRandom.uuid
-    $connections.each do |conn|
-      #sse_event(conn, "Users", eventId)  #Users sse event
-    end
   when "/reconnect"
     disconnectAndPart(streamObj, strToken, user) 
   else
     if message.start_with?("/kick")
       user2 = message.delete_prefix("/kick ")
-      if getUserList().include?(user2)&&user2!=user
+      if getUserList().include?(user2) && user2 != user
         strToken2 = $userStreamToken[user2]
         streamObj2 = $streams[strToken2]
-        sse_kick(user,user2,streamObj2,strToken2)
+        sse_kick(user, user2, streamObj2, strToken2)
       else
-        return [409,"Cannot kick yourself or offline users" + user]
+        return [409, "Cannot kick yourself or offline users" + user]
       end
-
     else
       #Send msg to all user streams
       eventId = SecureRandom.uuid
       $connections.each do |connection| 
-        sse_event(connection, "Message",eventId, username=user, message=message)  #Message sse event
+        sse_event(connection, "Message", eventId, username=user, message=message)  #Message sse event
       end
     end
   end
@@ -261,6 +254,5 @@ post '/message' do
 
   headers 'Content-Type' => 'text/html; charset=utf-8'
   headers 'Token' => newMsgToken
-  
   return [201, "CREATED"]
 end
